@@ -1,0 +1,156 @@
+//Adding ECE3 header file
+#include <ECE3.h>
+
+// This code aims to do the following:
+// - The first part will set up the pins on the car
+// - The void.loop part of the code will continuously collect data and
+// carry out the fusion calculation to send commands to the car
+
+uint16_t sensorValues[8]; // right -> left, 0 -> 7
+
+//Declaring left pins
+const int left_nslp_pin=31; // nslp (nonsleep pin) ==> awake & ready for PWM
+const int left_dir_pin=29; // direction pin, LOW = clockwise, HIGH = counterclockwise
+const int left_pwm_pin=40; // sends PWM (0-255) to this pin
+//Declaring right pins
+const int right_nslp_pin=31; // nslp (nonsleep pin) ==> awake & ready for PWM
+const int right_dir_pin=29; // direction pin, LOW = clockwise, HIGH = counterclockwise
+const int right_pwm_pin=40; // sends PWM (0-255) to this pin
+
+//Declaring global variables (parameters used in the loops)
+
+float kp = 0, kd = 0;
+int allBlack = 0;
+bool halfTurn = false;
+int previousError = 0;
+
+const int minSensor[8] = {902, 574, 853, 782, 736, 782, 712, 853}; //Measured before each run
+const int maxSensor[8] = {2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500};
+
+void setup()
+{
+  //Setting and initializing the left pins
+  pinMode(left_nslp_pin,OUTPUT);
+  pinMode(left_dir_pin,OUTPUT);
+  pinMode(left_pwm_pin,OUTPUT);
+  digitalWrite(left_dir_pin,LOW);
+  digitalWrite(left_nslp_pin,HIGH);
+
+  //Setting and initializing the right pins
+  pinMode(right_nslp_pin,OUTPUT);
+  pinMode(right_dir_pin,OUTPUT);
+  pinMode(right_pwm_pin,OUTPUT);
+  digitalWrite(right_dir_pin,LOW);
+  digitalWrite(right_nslp_pin,HIGH);
+
+  ECE3_Init(); //as given in the IR sensor code
+
+  //Serial.begin(9600);
+  delay(1000); //The car starts 1 second after being turned on, allows time to measure laps
+}
+
+void loop() //Sampling rate is approx. 150/s
+{
+    //Setting base speeds (note these are local variables)
+    int leftSpeed = 85;
+    int rightSpeed = 85;
+    bool crossPiece = true;
+
+    //Carrying out sensor fusion
+    float fusionVal = 0;
+    float scaledVal[8];
+
+    for(int i = 0; i < 8; i++)
+  {
+    scaledVal[i] = 1000 * (sensorValues[i] - minSensor[i]) / (maxSensor[i] - minSensor[i]);
+  }
+  fusionVal = ((-12 * callibration_value[0]) + (-14 * callibration_value[1]) +
+  (-12 * callibration_value[2]) + (-8 * callibration_value[3]) + (8 * callibration_value[4]) +
+  (12 * callibration_value[5]) + (14 * callibration_value[6]) + (12 * callibration_value[7]))/8;
+
+  float errorChange = fusionVal - previousError; //Note previousError is a global variable
+
+  //The kp and kd values are negative such that when the car is to the left
+  //The error is negative thus steering command is to the left (negative)
+  kp = 0.035, kd = 0.5;
+
+  //Implementing the proportional and derivative controllers
+  //This implies car is to the left ==> TURN RIGHT, vice versa for left
+  if(fusionVal != 0)
+  {
+    leftSpeed -= kp * fusionVal;
+    rightSpeed += kp * fusionVal;
+  }
+
+  //Implementing the derivative controllers
+  //Slowing wheels down appeared to work better than speeding them up
+  if(errorChange < 0) //slow down right wheel
+ {
+   rightSpeed += kd * errorChange;
+ }
+ else if(errorChange > 0)//slow down left wheel
+ {
+   leftSpeed -= kd * errorChange;
+ }
+
+ //When the car was on the center track, to achieve faster time we decided
+ //to speed the vehicle up
+ if(fusionVal > -400 && fusionVal < 400)
+  {
+    leftSpeed += 60;
+    rightSpeed += 60;
+  }
+
+//Implementing the logic for the car to perform the 180 turn at crossPiece
+
+for(int i = 0; i < 8; i++)
+  {
+    if(sensorValues[i] < 2300)
+    {
+      crossPiece = false;
+    }
+  }
+
+if(crossPiece)
+{
+  allBlack++;
+}
+else
+{
+  allBlack = 0;
+}
+
+  if(allBlack != 0)
+  {
+    //This should execute when the car completes the lap and reaches the starting crosspiece
+    if(halfTurn == true)
+    {
+      analogWrite(left_pwm_pin,0);
+      analogWrite(right_pwm_pin,0);
+      exit(0); //Ends the program
+    }
+
+    halfTurn = true;
+  //Slow car down before the half turn for 10ms
+    analogWrite(left_pwm_pin,0);
+    analogWrite(right_pwm_pin,0);
+    delay(10);
+  //Provide power to the left wheel in the other direction so that it turns 180 degrees left, takes 350ms to finish turn
+    digitalWrite(left_dir_pin,HIGH);
+    analogWrite(left_pwm_pin,200);
+    analogWrite(right_pwm_pin,200);
+    delay(350);
+  //Stops the car briefly before returning to the start line
+    digitalWrite(left_dir_pin,LOW);
+    analogWrite(left_pwm_pin,0);
+    analogWrite(right_pwm_pin,0);
+    delay(10);
+  }
+  else
+  {
+    //Implementing the composite commands from kp and kd
+    analogWrite(left_pwm_pin, leftSpeed);
+    analogWrite(right_pwm_pin, rightSpeed);
+  }
+  previousError = fusionVal; //Setting the previous error for next loop
+ }
